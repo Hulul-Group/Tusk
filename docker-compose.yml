@@ -1,0 +1,30 @@
+# Tusk — single binary with SQLite. Drop-in replacement for Kutt's docker-compose.yml:
+# same volume paths (/var/lib/kutt, /kutt/custom), same port, same env vars.
+#
+#   docker compose up -d
+#
+# Existing Kutt volumes can be reused as-is (keep the same compose project name
+# or mark them `external: true`).
+services:
+  server:
+    build:
+      context: .
+    image: tusk:latest
+    restart: unless-stopped
+    volumes:
+      - db_data_sqlite:/var/lib/kutt
+      - custom:/kutt/custom
+    environment:
+      DB_FILENAME: "/var/lib/kutt/data.sqlite"
+      # JWT_SECRET must match the old Kutt value to keep existing sessions valid.
+      JWT_SECRET: ${JWT_SECRET:-}
+      DEFAULT_DOMAIN: ${DEFAULT_DOMAIN:-localhost:3000}
+      SITE_NAME: ${SITE_NAME:-Kutt}
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - 3000:3000
+volumes:
+  db_data_sqlite:
+  custom:

@@ -1,0 +1,16 @@
+.git
+.github
+bin
+**/node_modules
+web/dist
+internal/webui/dist/*
+!internal/webui/dist/.gitignore
+db
+*.db
+*.sqlite
+.env
+.env.*
+coverage.out
+deploy/k6
+docs
+**/*.test

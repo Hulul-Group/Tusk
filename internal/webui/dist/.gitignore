@@ -1,0 +1,5 @@
+# Build output of web/ is copied here by `make web` / the Dockerfile and
+# embedded with //go:embed. Only this file is committed so that
+# `go build ./...` works without node (webui serves a placeholder page).
+*
+!.gitignore

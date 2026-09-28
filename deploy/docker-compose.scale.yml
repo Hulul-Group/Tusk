@@ -1,0 +1,245 @@
+# Tusk microservice split behind Traefik v3 + Cloudflare.
+#
+#   Internet → Cloudflare (orange cloud) → Traefik :443 ─┬─ short-link paths  → redirector ×N  (:3001)
+#                                                       ├─ UI + /api/*        → api ×M         (:3000)
+#                                                       └─ (no ingress)         worker ×K
+#   redirector ──XADD──▶ Redis stream tusk:visits ──XREADGROUP──▶ worker ──▶ Postgres
+#   api ──PUBLISH tusk:inval──▶ redirectors (drop local LRU entries on edit/delete/ban)
+#
+# Usage (from the repo root):
+#   cp deploy/.env.example deploy/.env   # then edit
+#   docker compose -f deploy/docker-compose.scale.yml --env-file deploy/.env up -d --scale redirector=4 --scale api=2
+#
+# See deploy/README.md for Cloudflare zone settings and scaling guidance.
+
+x-tusk-env: &tusk-env
+  NODE_ENV: production
+  SITE_NAME: ${SITE_NAME:-Kutt}
+  DEFAULT_DOMAIN: ${DEFAULT_DOMAIN:?set DEFAULT_DOMAIN}
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET (same value as the old Kutt install)}
+  TRUST_PROXY: "true"
+  DB_CLIENT: pg
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_NAME: ${DB_NAME:-kutt}
+  DB_USER: ${DB_USER:-kutt}
+  DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+  DB_POOL_MAX: ${DB_POOL_MAX:-20}
+  REDIS_ENABLED: "true"
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  # Geo: Cloudflare adds CF-IPCountry when "IP Geolocation" is ON for the zone.
+  GEO_PROVIDER: ${GEO_PROVIDER:-cloudflare}
+  GEO_HEADER: CF-IPCountry
+  GEO_TRUST_CLOUDFLARE_ONLY: "true"
+  # Hot-path cache
+  LOCAL_CACHE_SIZE: ${LOCAL_CACHE_SIZE:-200000}
+  LOCAL_CACHE_TTL: ${LOCAL_CACHE_TTL:-30s}
+  REDIS_CACHE_TTL: ${REDIS_CACHE_TTL:-15m}
+  METRICS_PORT: 9090
+
+x-tusk: &tusk
+  image: ${TUSK_IMAGE:-tusk:latest}
+  build:
+    context: ..
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  networks: [internal]
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  traefik:
+    image: traefik:v3.5
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=tusk_edge
+      - --entrypoints.web.address=:80
+      # No global HTTP→HTTPS redirect: custom domains may be served over plain HTTP
+      # (Kutt default CUSTOM_DOMAIN_USE_HTTPS=false). The main domain redirects per router.
+      - --entrypoints.web.forwardedHeaders.trustedIPs=${CLOUDFLARE_IPS}
+      - --entrypoints.websecure.address=:443
+      # Only trust X-Forwarded-* from Cloudflare edges (keep in sync with https://www.cloudflare.com/ips/).
+      - --entrypoints.websecure.forwardedHeaders.trustedIPs=${CLOUDFLARE_IPS}
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=15s
+      # TLS between Cloudflare and origin ("Full (strict)"): ACME via Cloudflare DNS-01.
+      - --certificatesresolvers.cf.acme.dnschallenge=true
+      - --certificatesresolvers.cf.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.cf.acme.email=${ACME_EMAIL:?set ACME_EMAIL}
+      - --certificatesresolvers.cf.acme.storage=/letsencrypt/acme.json
+      - --accesslog=false
+      - --metrics.prometheus=true
+      - --ping=true
+    environment:
+      CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN:?set CF_DNS_API_TOKEN (Zone:DNS:Edit)}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    networks: [edge]
+
+  redirector:
+    <<: *tusk
+    entrypoint: ["/usr/local/bin/redirector"]
+    environment:
+      <<: *tusk-env
+      SERVICE_ROLES: redirector
+      REDIRECTOR_PORT: 3001
+    networks: [internal, edge]
+    deploy:
+      replicas: ${REDIRECTOR_REPLICAS:-2}
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.redirector.loadbalancer.server.port=3001
+      - traefik.http.services.redirector.loadbalancer.healthcheck.path=/api/v2/health
+      - traefik.http.services.redirector.loadbalancer.healthcheck.interval=5s
+      # 1) Single-segment paths on the main domain: /{id} (and /{id}/ ), EXCEPT reserved
+      #    SPA routes, which the api router claims with a higher priority below.
+      - traefik.http.routers.redirect.rule=Host(`${DEFAULT_DOMAIN}`) && PathRegexp(`^/[^/]+/?$$`)
+      - traefik.http.routers.redirect.priority=10
+      - traefik.http.routers.redirect.entrypoints=websecure
+      - traefik.http.routers.redirect.tls.certresolver=cf
+      - traefik.http.routers.redirect.middlewares=cf-only@docker
+      - traefik.http.routers.redirect.service=redirector
+      # 2) Users' custom domains: everything (homepage redirect + /{id}) except /api.
+      #    HTTP and HTTPS. With Cloudflare for SaaS the edge terminates TLS for the
+      #    customer hostname; otherwise set CUSTOM_DOMAIN_MIDDLEWARES=none@docker (see README).
+      - traefik.http.routers.redirect-custom.rule=!Host(`${DEFAULT_DOMAIN}`) && !PathPrefix(`/api/`)
+      - traefik.http.routers.redirect-custom.priority=5
+      - traefik.http.routers.redirect-custom.entrypoints=websecure
+      - traefik.http.routers.redirect-custom.tls=true
+      - traefik.http.routers.redirect-custom.middlewares=${CUSTOM_DOMAIN_MIDDLEWARES:-cf-only@docker}
+      - traefik.http.routers.redirect-custom.service=redirector
+      - traefik.http.routers.redirect-custom-http.rule=!Host(`${DEFAULT_DOMAIN}`) && !PathPrefix(`/api/`)
+      - traefik.http.routers.redirect-custom-http.priority=5
+      - traefik.http.routers.redirect-custom-http.entrypoints=web
+      - traefik.http.routers.redirect-custom-http.middlewares=${CUSTOM_DOMAIN_MIDDLEWARES:-cf-only@docker}
+      - traefik.http.routers.redirect-custom-http.service=redirector
+
+  api:
+    <<: *tusk
+    entrypoint: ["/usr/local/bin/api"]
+    environment:
+      <<: *tusk-env
+      SERVICE_ROLES: api
+      PORT: 3000
+      TUSK_CUSTOM_DIR: /kutt/custom
+    volumes:
+      - custom:/kutt/custom:ro
+    networks: [internal, edge]
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+    labels:
+      - traefik.enable=true
+      # Shared middlewares (docker-provider scoped, referenced as name@docker).
+      # cf-only: reject anything that did not come through Cloudflare (belt and braces with the host firewall).
+      - traefik.http.middlewares.cf-only.ipallowlist.sourcerange=${CLOUDFLARE_IPS}
+      - traefik.http.middlewares.none.headers.customrequestheaders.X-Tusk-Edge=traefik
+      - traefik.http.middlewares.compress.compress=true
+      - traefik.http.middlewares.to-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.to-https.redirectscheme.permanent=true
+      - traefik.http.routers.main-http.rule=Host(`${DEFAULT_DOMAIN}`)
+      - traefik.http.routers.main-http.entrypoints=web
+      - traefik.http.routers.main-http.middlewares=to-https@docker
+      - traefik.http.routers.main-http.service=api
+      - traefik.http.services.api.loadbalancer.server.port=3000
+      - traefik.http.services.api.loadbalancer.healthcheck.path=/api/v2/health
+      - traefik.http.services.api.loadbalancer.healthcheck.interval=5s
+      # API, OIDC callback, SPA routes and static assets on the main domain.
+      # Keep the SPA list in sync with internal/webui.SPARoutes.
+      - "traefik.http.routers.app.rule=Host(`${DEFAULT_DOMAIN}`) && (PathPrefix(`/api/`) || PathPrefix(`/assets/`) || PathPrefix(`/images/`) || PathPrefix(`/css/`) || PathPrefix(`/fonts/`) || Path(`/`) || Path(`/favicon.ico`) || Path(`/robots.txt`) || PathRegexp(`^/(login|logout|create-admin|settings|admin|stats|report|terms|banned|404|reset-password|verify|verify-email)(/.*)?$$`))"
+      - traefik.http.routers.app.priority=100
+      - traefik.http.routers.app.entrypoints=websecure
+      - traefik.http.routers.app.tls.certresolver=cf
+      - traefik.http.routers.app.tls.domains[0].main=${DEFAULT_DOMAIN}
+      - traefik.http.routers.app.middlewares=cf-only@docker,compress@docker
+      - traefik.http.routers.app.service=api
+      # /api/* on custom domains (e.g. the password form POST) also goes to the api.
+      - traefik.http.routers.app-custom.rule=!Host(`${DEFAULT_DOMAIN}`) && PathPrefix(`/api/`)
+      - traefik.http.routers.app-custom.priority=50
+      - traefik.http.routers.app-custom.entrypoints=websecure
+      - traefik.http.routers.app-custom.tls=true
+      - traefik.http.routers.app-custom.middlewares=${CUSTOM_DOMAIN_MIDDLEWARES:-cf-only@docker}
+      - traefik.http.routers.app-custom.service=api
+      - traefik.http.routers.app-custom-http.rule=!Host(`${DEFAULT_DOMAIN}`) && PathPrefix(`/api/`)
+      - traefik.http.routers.app-custom-http.priority=50
+      - traefik.http.routers.app-custom-http.entrypoints=web
+      - traefik.http.routers.app-custom-http.middlewares=${CUSTOM_DOMAIN_MIDDLEWARES:-cf-only@docker}
+      - traefik.http.routers.app-custom-http.service=api
+
+  worker:
+    <<: *tusk
+    entrypoint: ["/usr/local/bin/worker"]
+    environment:
+      <<: *tusk-env
+      SERVICE_ROLES: worker
+      VISIT_BATCH_SIZE: ${VISIT_BATCH_SIZE:-1000}
+      VISIT_FLUSH_INTERVAL: ${VISIT_FLUSH_INTERVAL:-1s}
+      EXPIRED_LINK_SWEEP: 30s
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  postgres:
+    image: postgres:17-alpine
+    restart: always
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - synchronous_commit=off   # visit counters tolerate losing <1s on crash; links are also cached
+    environment:
+      POSTGRES_DB: ${DB_NAME:-kutt}
+      POSTGRES_USER: ${DB_USER:-kutt}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+    volumes:
+      - db_data_pg:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    # AOF so unacked visit events in the stream survive a Redis restart.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  edge:
+    name: tusk_edge
+  internal:
+    internal: true
+
+volumes:
+  db_data_pg:
+  redis_data:
+  letsencrypt:
+  custom:

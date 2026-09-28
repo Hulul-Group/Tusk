@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Modern open source URL shortener." />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16.png" />
+    <link rel="apple-touch-icon" href="/images/favicon-196x196.png" />
+    <title>Kutt</title>
+    <script>
+      // Apply the theme before first paint to avoid a light/dark flash.
+      ;(function () {
+        try {
+          var t = localStorage.getItem("tusk-ui-theme") || "system"
+          var d = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
+          document.documentElement.classList.add(d ? "dark" : "light")
+        } catch (e) {}
+      })()
+    </script>
+    <!--tusk:custom-css-->
+  </head>
+  <body>
+    <noscript>This app needs JavaScript. Short links still work without it.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
