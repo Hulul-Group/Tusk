@@ -1,0 +1,24 @@
+{{define "protected.html"}}{{template "head" .}}
+<h1>Protected link.</h1>
+<p>Enter the password to be redirected to the link.</p>
+<form id="protected-form" method="post" action="/api/v2/links/{{.ID}}/protected">
+  <label for="protected-link-password">Password:</label>
+  <input type="password" id="protected-link-password" name="password" placeholder="Password..." minlength="3" maxlength="64" autocomplete="current-password" required autofocus>
+  <button type="submit">Unlock &amp; Go</button>
+  <p class="error" id="protected-error" role="alert"{{if not .Error}} hidden{{end}}>{{.Error}}</p>
+</form>
+<script>
+(function(){
+  var f=document.getElementById("protected-form"),e=document.getElementById("protected-error");
+  f.addEventListener("submit",function(ev){
+    ev.preventDefault();var b=f.querySelector("button");b.disabled=true;e.hidden=true;
+    fetch(f.action,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},
+      body:JSON.stringify({password:f.password.value})})
+    .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
+    .then(function(x){if(x.ok&&x.j.target){e.hidden=false;e.className="success";e.textContent="Redirecting...";window.location.href=x.j.target;return}
+      e.className="error";e.textContent=(x.j&&x.j.error)||"An error occurred.";e.hidden=false;b.disabled=false})
+    .catch(function(){e.className="error";e.textContent="An error occurred.";e.hidden=false;b.disabled=false});
+  });
+})();
+</script>
+{{template "foot" .}}{{end}}

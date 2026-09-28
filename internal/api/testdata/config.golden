@@ -1,0 +1,1 @@
+{"site_name":"Kutt","default_domain":"kutt.test","link_length":6,"disallow_registration":true,"disallow_anonymous_links":false,"disallow_login_form":false,"oidc_enabled":false,"oidc_button_text":"Log in with OIDC","mail_enabled":false,"report_email":"","contact_email":"","server_ip_address":"","server_cname_address":"","custom_domain_use_https":false,"needs_admin_setup":false}

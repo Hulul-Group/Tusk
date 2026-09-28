@@ -1,0 +1,1 @@
+{"id":"UUID","address":"my-link","description":"hello","banned":false,"password":true,"expire_in":"2026-09-28T14:00:00.000Z","target":"http://example.com/path?q=1","visit_count":0,"created_at":"2026-09-28T12:00:00.000Z","updated_at":"2026-09-28T12:00:00.000Z","link":"https://kutt.test/my-link"}

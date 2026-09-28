@@ -1,0 +1,41 @@
+{
+  "bcrypt": {
+    "password": "correct horse battery",
+    "hash": "$2a$12$.DPWdnMjtNHD8sF.bq5iouuW/E/FQm9ZS4LunKimuCbafyp3EtG7W"
+  },
+  "jwt": {
+    "secret": "node-compat-secret",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBcGlBdXRoIiwic3ViIjo0MiwiaWF0IjoxNzkwNTU1MTAxLCJleHAiOjQwNzA5MDg4MDB9.xKulSjZ6sWOpoUfftolfZZ47OAObYvsXUIAIX5skknM",
+    "expired": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBcGlBdXRoIiwic3ViIjo0MiwiaWF0IjoxMDAwLCJleHAiOjIwMDB9.2oSia3_UEtiF4OWWWmQX_u3K2shoW6bpS_FBgKDNWCk",
+    "strSub": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBcGlBdXRoIiwic3ViIjoiYUBiLmMiLCJpYXQiOjEwMDAsImV4cCI6NDEwMjQ0NDgwMH0.PXQqqLatiByiC-puSGlzkRS6aLYwaCvaMK7pprn9M74"
+  },
+  "ms": {
+    "100": 100,
+    "1m": 60000,
+    "8h": 28800000,
+    "42 days": 3628800000,
+    "1.5h": 5400000,
+    "2 weeks": 1209600000,
+    "1y": 31557600000,
+    "-5m": -300000,
+    "abc": null,
+    "0m": 0,
+    "10 mins": 600000,
+    "3 Hrs": 10800000,
+    ".5d": 43200000,
+    "1 yrs": 31557600000,
+    "5 s": 5000,
+    "1 msecs": 1
+  },
+  "msLong": {
+    "500": "500 ms",
+    "1000": "1 second",
+    "90000": "2 minutes",
+    "3600000": "1 hour",
+    "5400000": "2 hours",
+    "86400000": "1 day",
+    "129600000": "2 days",
+    "172800000": "2 days",
+    "-60000": "-1 minute"
+  }
+}
